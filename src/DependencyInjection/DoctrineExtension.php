@@ -5,12 +5,14 @@ declare(strict_types=1);
 namespace Doctrine\Bundle\DoctrineBundle\DependencyInjection;
 
 use Doctrine\Bundle\DoctrineBundle\Attribute\AsDbalType;
+use Doctrine\Bundle\DoctrineBundle\Attribute\AsDelegateCollection;
 use Doctrine\Bundle\DoctrineBundle\Attribute\AsDoctrineListener;
 use Doctrine\Bundle\DoctrineBundle\Attribute\AsEntityListener;
 use Doctrine\Bundle\DoctrineBundle\Attribute\AsMiddleware;
 use Doctrine\Bundle\DoctrineBundle\CacheWarmer\DoctrineMetadataCacheWarmer;
 use Doctrine\Bundle\DoctrineBundle\ConnectionFactory;
 use Doctrine\Bundle\DoctrineBundle\Dbal\RegexSchemaAssetFilter;
+use Doctrine\Bundle\DoctrineBundle\DependencyInjection\Compiler\DelegateCollectionPass;
 use Doctrine\Bundle\DoctrineBundle\DependencyInjection\Compiler\EntityAutoDiscoveryPass;
 use Doctrine\Bundle\DoctrineBundle\DependencyInjection\Compiler\IdGeneratorPass;
 use Doctrine\Bundle\DoctrineBundle\DependencyInjection\Compiler\RegisterDbalTypePass;
@@ -29,6 +31,7 @@ use Doctrine\ORM\Cache\Logging\StatisticsCacheLogger;
 use Doctrine\ORM\Cache\Region\DefaultRegion;
 use Doctrine\ORM\Cache\Region\FileLockRegion;
 use Doctrine\ORM\Cache\RegionsConfiguration;
+use Doctrine\ORM\Collection\DelegateCollectionFactory;
 use Doctrine\ORM\Configuration as OrmConfiguration;
 use Doctrine\ORM\EntityManagerInterface;
 use Doctrine\ORM\Events;
@@ -939,6 +942,16 @@ final class DoctrineExtension extends Extension
                 'priority'       => $attribute->priority,
             ]);
         });
+
+        // Custom collections exist since doctrine/orm 3.8
+        if (interface_exists(DelegateCollectionFactory::class)) {
+            $container->registerAttributeForAutoconfiguration(AsDelegateCollection::class, static function (ChildDefinition $definition): void {
+                $definition->addTag(DelegateCollectionPass::TAG);
+            });
+        } else {
+            $container->removeDefinition('doctrine.orm.container_delegate_collection_factory');
+        }
+
         // symfony/doctrine-bridge 8.2 added the "before" and "after" options of the tag, and Query::ranOnPrimary() in the same version
         /** @phpstan-ignore function.alreadyNarrowedType */
         $bridgeOrdersListeners = method_exists(Query::class, 'ranOnPrimary');
@@ -1040,6 +1053,12 @@ final class DoctrineExtension extends Extension
 
         if ($entityManager['repository_factory']) {
             $methods['setRepositoryFactory'] = new Reference($entityManager['repository_factory']);
+        }
+
+        if (interface_exists(DelegateCollectionFactory::class)) {
+            $methods['setDelegateCollectionFactory'] = new Reference($entityManager['delegate_collection_factory']);
+        } elseif ($entityManager['delegate_collection_factory'] !== 'doctrine.orm.container_delegate_collection_factory') {
+            throw new LogicException('The "delegate_collection_factory" option requires doctrine/orm 3.8 or higher.');
         }
 
         foreach ($methods as $method => $arg) {

@@ -7,6 +7,7 @@ namespace Doctrine\Bundle\DoctrineBundle\Tests\DependencyInjection;
 use Closure;
 use Composer\InstalledVersions;
 use Doctrine\Bundle\DoctrineBundle\Attribute\AsDbalType;
+use Doctrine\Bundle\DoctrineBundle\Attribute\AsDelegateCollection;
 use Doctrine\Bundle\DoctrineBundle\Attribute\AsDoctrineListener;
 use Doctrine\Bundle\DoctrineBundle\Attribute\AsEntityListener;
 use Doctrine\Bundle\DoctrineBundle\CacheWarmer\DoctrineMetadataCacheWarmer;
@@ -20,6 +21,7 @@ use Doctrine\Bundle\DoctrineBundle\Tests\DependencyInjection\Fixtures\Php8EventL
 use Doctrine\DBAL\Connection;
 use Doctrine\Deprecations\PHPUnit\VerifyDeprecations;
 use Doctrine\ORM\Cache\DefaultCacheFactory;
+use Doctrine\ORM\Collection\DelegateCollectionFactory;
 use Doctrine\ORM\EntityManager;
 use Doctrine\ORM\EntityManagerInterface;
 use Doctrine\ORM\Events;
@@ -1191,6 +1193,88 @@ class DoctrineExtensionTest extends TestCase
             'priority'       => null,
         ];
         $this->assertSame([$expected], $definition->getTag('doctrine.orm.entity_listener'));
+    }
+
+    public function testAsDelegateCollectionAttribute(): void
+    {
+        if (! interface_exists(DelegateCollectionFactory::class)) {
+            self::markTestSkipped('This test requires ORM 3.8');
+        }
+
+        $container = $this->getContainer();
+        $extension = new DoctrineExtension();
+
+        $config = BundleConfigurationBuilder::createBuilderWithBaseValues()->build();
+
+        $extension->load([$config], $container);
+
+        /** @phpstan-ignore function.alreadyNarrowedType */
+        $attributes = method_exists($container, 'getAttributeAutoconfigurators')
+            ? array_map(static fn (array $arr) => $arr[0], $container->getAttributeAutoconfigurators())
+            /** @phpstan-ignore method.notFound */
+            : $container->getAutoconfiguredAttributes();
+        $this->assertInstanceOf(Closure::class, $attributes[AsDelegateCollection::class]);
+
+        $definition = new ChildDefinition('');
+
+        $attributes[AsDelegateCollection::class]($definition);
+
+        $this->assertSame([[]], $definition->getTag('doctrine.orm.delegate_collection'));
+    }
+
+    public function testDelegateCollectionsAreNotWiredBeforeOrm38(): void
+    {
+        if (! interface_exists(EntityManagerInterface::class)) {
+            self::markTestSkipped('This test requires ORM');
+        }
+
+        if (interface_exists(DelegateCollectionFactory::class)) {
+            self::markTestSkipped('This test covers ORM before 3.8, which has no custom collections.');
+        }
+
+        $container = $this->getContainer();
+        $extension = new DoctrineExtension();
+
+        $config = BundleConfigurationBuilder::createBuilderWithBaseValues()->build();
+
+        $extension->load([$config], $container);
+
+        $definition  = $container->getDefinition('doctrine.orm.default_configuration');
+        $methodCalls = array_map(static fn (array $call) => $call[0], $definition->getMethodCalls());
+
+        /** @phpstan-ignore function.alreadyNarrowedType */
+        $attributes = method_exists($container, 'getAttributeAutoconfigurators')
+            ? $container->getAttributeAutoconfigurators()
+            /** @phpstan-ignore method.notFound */
+            : $container->getAutoconfiguredAttributes();
+
+        self::assertNotContains('setDelegateCollectionFactory', $methodCalls);
+        self::assertFalse($container->hasDefinition('doctrine.orm.container_delegate_collection_factory'));
+        self::assertArrayNotHasKey(AsDelegateCollection::class, $attributes);
+    }
+
+    public function testDelegateCollectionFactoryRequiresOrm38(): void
+    {
+        if (! interface_exists(EntityManagerInterface::class)) {
+            self::markTestSkipped('This test requires ORM');
+        }
+
+        if (interface_exists(DelegateCollectionFactory::class)) {
+            self::markTestSkipped('This test covers ORM before 3.8, which has no custom collections.');
+        }
+
+        $container = $this->getContainer();
+        $extension = new DoctrineExtension();
+
+        $config = BundleConfigurationBuilder::createBuilder()
+            ->addBaseConnection()
+            ->addEntityManager(['delegate_collection_factory' => 'delegate_collection_factory'])
+            ->build();
+
+        $this->expectException(LogicException::class);
+        $this->expectExceptionMessage('The "delegate_collection_factory" option requires doctrine/orm 3.8 or higher.');
+
+        $extension->load([$config], $container);
     }
 
     public function testAsDoctrineListenerAttribute(): void
